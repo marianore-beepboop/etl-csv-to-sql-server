@@ -1,0 +1,100 @@
+version: '3'
+services:
+
+  sql-server-db:
+    image: mcr.microsoft.com/mssql/server:2017-latest
+    environment:
+      - SA_USER=${SQL_SERVER_USER}
+      - SA_PASSWORD=${SQL_SERVER_PASSWORD}
+      - ACCEPT_EULA=Y
+    volumes:
+      - sql-server-data:/var/opt/mssql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    expose:
+      - ${SQL_SERVER_PORT}
+    ports:
+      - ${SQL_SERVER_PORT}:1433
+    healthcheck:
+      test: /opt/mssql-tools/bin/sqlcmd -S localhost -U "${SA_USER}" -P "${SA_PASSWORD}" -Q "SELECT 1" -b -o /dev/null
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - default-network
+    restart: always
+
+  base:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+    depends_on:
+      - sql-server-db
+    networks:
+      - default-network
+
+  # AIRFLOW WEBSERVER
+  airflow-webserver:
+    image: ${COMPOSE_PROJECT_NAME}_base
+    depends_on:
+      - sql-server-db
+    environment:
+      AIRFLOW__CORE__BASE_LOG_FOLDER: ${AIRFLOW_LOG_FOLDER}
+      AIRFLOW__CORE__DAGS_FOLDER: ${AIRFLOW_DAG_FOLDER}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES}
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: "mssql+pyodbc://${SQL_SERVER_USER}:${SQL_SERVER_PASSWORD}@${COMPOSE_PROJECT_NAME}-${SQL_SERVER_HOST}-1:1433/${SQL_SERVER_DB}"
+      AIRFLOW__WEBSERVER__INSTANCE_NAME: ${COMPOSE_PROJECT_NAME}
+      AIRFLOW__WEBSERVER__WEB_SERVER_PORT: ${AIRFLOW_PORT}
+      AIRFLOW_CREATE_USER_CONN: ${AIRFLOW_CREATE_USER_CONN}
+      AIRFLOW_CONNECTION_SLACK_HOST_URL: ${AIRFLOW_CONNECTION_SLACK_HOST_URL}
+      AIRFLOW_CONNECTION_SLACK_PASSWORD: ${AIRFLOW_CONNECTION_SLACK_PASSWORD}
+      AIRFLOW_EMAIL: ${AIRFLOW_EMAIL}
+      AIRFLOW_FIRST: ${AIRFLOW_FIRST}
+      AIRFLOW_LAST: ${AIRFLOW_LAST}
+      AIRFLOW_USER: ${AIRFLOW_USER}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD}
+      AIRFLOW_ROLE: ${AIRFLOW_ROLE}
+      TZ: UTC
+    ports:
+      - ${AIRFLOW_PORT}:${AIRFLOW_PORT}
+    entrypoint: bash /project/docker/entrypoints/start_airflow_webserver.sh
+    volumes:
+      - ../dags/logs/:${AIRFLOW_LOG_FOLDER}
+      - ../dags/:${AIRFLOW_DAG_FOLDER}
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f /usr/local/airflow/airflow-webserver.pid ]"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+    restart: always
+    networks:
+      - default-network
+
+  # AIRFLOW SCHEDULER
+  airflow-scheduler:
+    image: ${COMPOSE_PROJECT_NAME}_base
+    depends_on:
+      - airflow-webserver
+    environment:
+      AIRFLOW__CORE__BASE_LOG_FOLDER: ${AIRFLOW_LOG_FOLDER}
+      AIRFLOW__CORE__DAGS_FOLDER: ${AIRFLOW_DAG_FOLDER}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES}
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: "mssql+pyodbc://${SQL_SERVER_USER}:${SQL_SERVER_PASSWORD}@${COMPOSE_PROJECT_NAME}-${SQL_SERVER_HOST}-1:1433/${SQL_SERVER_DB}"
+      TZ: UTC
+    entrypoint: poetry run airflow scheduler
+    volumes:
+      - ../dags/logs/:${AIRFLOW_LOG_FOLDER}
+      - ../dags/:${AIRFLOW_DAG_FOLDER}
+    networks:
+      - default-network
+    restart: always
+
+volumes:
+  sql-server-data:
+      
+networks:
+  default-network:
